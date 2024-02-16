@@ -1,7 +1,6 @@
 # Known issues
 
 * Only tested with Marpou Ceiling CCT light (definitely doesn't support RGB lights currently, but that could be added in the future).
-* All lights are controlled at the same time (does not support controlling different lamps individually - need help with ESPHome internals to figure this one out).
 
 # How to try it
 

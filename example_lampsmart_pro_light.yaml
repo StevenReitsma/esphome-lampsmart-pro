@@ -1,6 +1,6 @@
 external_components:
   # shorthand
-  source: github://aronsky/esphome-components
+  source: github://StevenReitsma/esphome-lampsmart-pro
 
 light:
   - platform: lampsmart_pro_light

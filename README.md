@@ -1,5 +1,4 @@
-# Lev's ESPHome Components
-Custom components for ESPHome
+# esphome-lampsmart-pro
+Custom ESPHome component to interface with Chinese "LampSmart Pro" Bluetooth lights.
 
-## LampSmart Pro
-Used for Marpou Ceiling Light - see details [here](components/lampsmart_pro_light/README.md).
+Basically it's https://github.com/aronsky/esphome-components and https://github.com/MasterDevX/lampify combined to work with more (or different?) lights.
