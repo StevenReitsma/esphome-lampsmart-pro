@@ -33,6 +33,6 @@ The pair and unpair services need `custom_services: true` in the `api:` section.
 
 If this component works, but the cold and warm temperatures are reversed (that is, setting the temperature in Home Assistant to warm results in cold/blue light, and setting it to cold results in warm/yellow light), add a `reversed: true` line to your `lightsmart_pro_light` config.
 
-If the minimum brightness is too bright, and you know that your light can go darker - try changing the minimum brightness via the `min_brightness` configuration option (it takes a number between 1 and 255).
+Home Assistant's brightness range is mapped onto `min_brightness`..255 (a raw value, default 7), so 1% is the dimmest value the light shows. If the lowest few percent all look the same, raise `min_brightness` to the raw value where the light stops getting dimmer; if 1% is still too bright and your light can go darker, lower it.
 
 If the light sometimes misses commands, raise `max_duration` (how long each state is repeated) or `duration` (how long each packet is advertised before the next state may replace it).

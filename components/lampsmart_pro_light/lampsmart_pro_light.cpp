@@ -253,21 +253,13 @@ namespace esphome
         return;
       }
 
-      uint8_t cwi = (uint8_t)(0xff * cwf);
-      uint8_t wwi = (uint8_t)(0xff * wwf);
-
-      if ((cwi < min_brightness_) && (wwi < min_brightness_))
-      {
-        if (cwf > 0.000001)
-        {
-          cwi = min_brightness_;
-        }
-
-        if (wwf > 0.000001)
-        {
-          wwi = min_brightness_;
-        }
-      }
+      // The lamp shows every value below its minimum the same, so map the brighter
+      // channel onto min_brightness_..255 and scale the other with it, keeping the
+      // colour temperature.
+      float level = std::max(cwf, wwf);
+      float target = min_brightness_ + level * (0xff - min_brightness_);
+      uint8_t cwi = (uint8_t) lroundf(cwf / level * target);
+      uint8_t wwi = (uint8_t) lroundf(wwf / level * target);
 
       if (sending && last_cmd_ == CMD_DIM && last_cold_ == cwi && last_warm_ == wwi)
       {
