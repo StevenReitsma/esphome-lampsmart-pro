@@ -166,8 +166,50 @@ namespace esphome
 
     void LampSmartProLight::setup()
     {
-      register_service(&LampSmartProLight::on_pair, light_state_ ? "pair_" + light_state_->get_object_id() : "pair");
-      register_service(&LampSmartProLight::on_unpair, light_state_ ? "unpair_" + light_state_->get_object_id() : "unpair");
+      std::string suffix;
+      if (light_state_)
+      {
+        char object_id[OBJECT_ID_MAX_LEN];
+        light_state_->write_object_id_to(object_id, sizeof(object_id));
+        suffix = std::string("_") + object_id;
+      }
+      register_service(&LampSmartProLight::on_pair, "pair" + suffix);
+      register_service(&LampSmartProLight::on_unpair, "unpair" + suffix);
+    }
+
+    void LampSmartProLight::loop()
+    {
+      uint32_t now = millis();
+
+      // A newer state takes over once every packet of the current one had a turn.
+      if (!next_packets_.empty() &&
+          (!advertising_ || now - packets_started_at_ >= tx_duration_ * packets_.size()))
+      {
+        packets_ = std::move(next_packets_);
+        next_packets_.clear();
+        packet_index_ = 0;
+        packets_started_at_ = now;
+        advertise(packets_[0]);
+        return;
+      }
+
+      if (!advertising_)
+      {
+        return;
+      }
+
+      if (now - packets_started_at_ >= std::max<uint32_t>(max_tx_duration_, tx_duration_ * packets_.size()))
+      {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_ble_gap_stop_advertising());
+        advertising_ = false;
+        return;
+      }
+
+      if (packets_.size() > 1 && now - packet_started_at_ >= tx_duration_)
+      {
+        packet_index_ = (packet_index_ + 1) % packets_.size();
+        advertise(packets_[packet_index_]);
+      }
     }
 
     light::LightTraits LampSmartProLight::get_traits()
@@ -195,10 +237,18 @@ namespace esphome
       float cwf, wwf;
       state->current_values_as_cwww(&cwf, &wwf, this->constant_brightness_);
 
+      // Transitions call write_state every loop; don't restart a state already being sent.
+      bool sending = advertising_ || !next_packets_.empty();
+
       if (!cwf && !wwf)
       {
-        send_packet(CMD_TURN_OFF, 0, 0);
-        _is_off = true;
+        if (sending && last_cmd_ == CMD_TURN_OFF)
+        {
+          return;
+        }
+        last_cmd_ = CMD_TURN_OFF;
+        is_off_ = true;
+        send_packets({build_packet(CMD_TURN_OFF, 0, 0)});
 
         return;
       }
@@ -219,15 +269,32 @@ namespace esphome
         }
       }
 
-      ESP_LOGD(TAG, "LampSmartProLight::write_state called! Requested cw: %d, ww: %d", cwi, wwi);
-
-      if (_is_off)
+      if (sending && last_cmd_ == CMD_DIM && last_cold_ == cwi && last_warm_ == wwi)
       {
-        send_packet(CMD_TURN_ON, 0, 0);
-        _is_off = false;
+        return;
       }
 
-      send_packet(CMD_DIM, cwi, wwi);
+      ESP_LOGD(TAG, "LampSmartProLight::write_state called! Requested cw: %d, ww: %d", cwi, wwi);
+
+      uint32_t now = millis();
+      if (is_off_)
+      {
+        turned_on_at_ = now;
+        is_off_ = false;
+      }
+      last_cmd_ = CMD_DIM;
+      last_cold_ = cwi;
+      last_warm_ = wwi;
+
+      // Keep repeating ON alongside the dim packets for a while after turning on, so a
+      // brightness change right after turn-on (e.g. a transition) can't crowd it out.
+      std::vector<Packet> packets;
+      if (now - turned_on_at_ < max_tx_duration_)
+      {
+        packets.push_back(build_packet(CMD_TURN_ON, 0, 0));
+      }
+      packets.push_back(build_packet(CMD_DIM, cwi, wwi));
+      send_packets(std::move(packets));
     }
 
     void LampSmartProLight::dump_config()
@@ -237,7 +304,8 @@ namespace esphome
       ESP_LOGCONFIG(TAG, "  Warm White Temperature: %f mireds", warm_white_temperature_);
       ESP_LOGCONFIG(TAG, "  Constant Brightness: %s", constant_brightness_ ? "true" : "false");
       ESP_LOGCONFIG(TAG, "  Minimum Brightness: %d", min_brightness_);
-      ESP_LOGCONFIG(TAG, "  Transmission Duration: %d millis", tx_duration_);
+      ESP_LOGCONFIG(TAG, "  Transmission Duration: %u millis", (unsigned) tx_duration_);
+      ESP_LOGCONFIG(TAG, "  Transmission Max Duration: %u millis", (unsigned) max_tx_duration_);
     }
 
     void LampSmartProLight::on_pair()
@@ -245,7 +313,8 @@ namespace esphome
       ESP_LOGD(TAG, "LampSmartProLight::on_pair called!");
 
       char *hostId = getHostDeviceIdentifier();
-      send_packet(CMD_PAIR, hostId[0], hostId[1]);
+      last_cmd_ = CMD_PAIR;
+      send_packets({build_packet(CMD_PAIR, hostId[0], hostId[1])});
     }
 
     void LampSmartProLight::on_unpair()
@@ -253,19 +322,37 @@ namespace esphome
       ESP_LOGD(TAG, "LampSmartProLight::on_unpair called!");
 
       char *hostId = getHostDeviceIdentifier();
-      send_packet(CMD_UNPAIR, hostId[0], hostId[1]);
+      last_cmd_ = CMD_UNPAIR;
+      send_packets({build_packet(CMD_UNPAIR, hostId[0], hostId[1])});
     }
 
-    void LampSmartProLight::send_packet(uint16_t cmd, uint8_t arg1, uint8_t arg2)
+    LampSmartProLight::Packet LampSmartProLight::build_packet(uint16_t cmd, uint8_t arg1, uint8_t arg2)
     {
       char *hostId = getHostDeviceIdentifier();
-      uint8_t *packet = (uint8_t *)buildPacket(cmd, hostId[0], hostId[1], arg1, arg2);
+      uint8_t *raw = (uint8_t *)buildPacket(cmd, hostId[0], hostId[1], arg1, arg2);
 
       // Skip first byte (BLE packet size indicator)
-      ESP_ERROR_CHECK_WITHOUT_ABORT(esp_ble_gap_config_adv_data_raw(&packet[1], 31));
+      Packet packet;
+      std::copy(raw + 1, raw + 1 + packet.size(), packet.begin());
+      return packet;
+    }
+
+    void LampSmartProLight::send_packets(std::vector<Packet> packets)
+    {
+      // Replaces any state still waiting for its turn: only the latest state matters.
+      next_packets_ = std::move(packets);
+    }
+
+    void LampSmartProLight::advertise(Packet &packet)
+    {
+      if (advertising_)
+      {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_ble_gap_stop_advertising());
+      }
+      ESP_ERROR_CHECK_WITHOUT_ABORT(esp_ble_gap_config_adv_data_raw(packet.data(), packet.size()));
       ESP_ERROR_CHECK_WITHOUT_ABORT(esp_ble_gap_start_advertising(&ADVERTISING_PARAMS));
-      delay(tx_duration_);
-      ESP_ERROR_CHECK_WITHOUT_ABORT(esp_ble_gap_stop_advertising());
+      advertising_ = true;
+      packet_started_at_ = millis();
     }
 
   } // namespace lampsmartpro

@@ -14,7 +14,9 @@ from esphome.const import (
 AUTO_LOAD = ["esp32_ble"]
 DEPENDENCIES = ["esp32"]
 
-lampsmartpro_ns = cg.esphome_ns.namespace('lampsmartpro')
+CONF_MAX_DURATION = "max_duration"
+
+lampsmartpro_ns =cg.esphome_ns.namespace('lampsmartpro')
 LampSmartProLight = lampsmartpro_ns.class_('LampSmartProLight', cg.Component, light.LightOutput)
 
 
@@ -22,7 +24,8 @@ CONFIG_SCHEMA = cv.All(
     light.RGB_LIGHT_SCHEMA.extend(
         {
             cv.GenerateID(CONF_OUTPUT_ID): cv.declare_id(LampSmartProLight),
-            cv.Optional(CONF_DURATION, default=100): cv.positive_int,
+            cv.Optional(CONF_DURATION, default=100): cv.positive_not_null_int,
+            cv.Optional(CONF_MAX_DURATION, default=3000): cv.positive_not_null_int,
             cv.Optional(CONF_COLD_WHITE_COLOR_TEMPERATURE): cv.color_temperature,
             cv.Optional(CONF_WARM_WHITE_COLOR_TEMPERATURE): cv.color_temperature,
             cv.Optional(CONF_CONSTANT_BRIGHTNESS, default=False): cv.boolean,
@@ -56,3 +59,4 @@ async def to_code(config):
     cg.add(var.set_reversed(config[CONF_REVERSED]))
     cg.add(var.set_min_brightness(config[CONF_MIN_BRIGHTNESS]))
     cg.add(var.set_tx_duration(config[CONF_DURATION]))
+    cg.add(var.set_max_tx_duration(config[CONF_MAX_DURATION]))
